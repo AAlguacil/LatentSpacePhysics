@@ -19,7 +19,7 @@ def g_tweaked(t, grav):
         r = np.interp(t, measured['t'], measured['r'])
         return vec3(-np.sin(-r)*grav, np.cos(-r)*grav, 0)
 
-guion = True
+guion = False
 pause = True
 
 # default solver parameters

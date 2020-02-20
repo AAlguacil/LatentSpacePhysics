@@ -91,7 +91,7 @@ class SceneList(object):
     @classmethod
     def load(cls, file_name, dataset_name="", dataset_path="", test_split=0.1):
         dataset_root = get_dataset_root(dataset_name, dataset_path)
-        loaded_npz = np.load(dataset_root + "/" + file_name)
+        loaded_npz = np.load(dataset_root + "/" + file_name, allow_pickle=True)
 
         assert loaded_npz["data"] is not None, ("Can not load data!")
         data = loaded_npz["data"]
