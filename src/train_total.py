@@ -37,7 +37,7 @@ from nn.arch.autoencoder import Autoencoder, Autoencoder2D
 from nn.arch.lstm import Lstm
 from nn.lstm.error_classification import restructure_encoder_data
 from nn.lstm.sequence_training_data import TrainingData, TrainingDataType
-from nn.callbacks import PlotRealsCallback
+from nn.callbacks import PlotRealsCallback, PlotRealsAndSlicesCallback
 from nn.losses import tanhMSE, Loss, LossType
 
 from util import evaluation
@@ -98,6 +98,7 @@ def main():
     if args.ae_load or args.ae_epochs > 0:
         # Create AE
         if dataset.description["dimension"] == 2:
+            print("Enc Out Shape: {}".format(dataset_res))
             autoencoder = Autoencoder2D(input_shape=(dataset_res, dataset_res, 1))
         else:
             autoencoder = Autoencoder(input_shape=(dataset_res, dataset_res, dataset_res, 1))
@@ -111,7 +112,8 @@ def main():
         autoencoder.l2_reg = settings.ae.l2_regularization
 
         # Create Loss
-        loss = "mse"
+        #loss = "mse"
+        loss_name = args.ae_loss
         if "tanhMSE" in args.ae_loss and "_MSE" in args.ae_loss:
             loss_ratio = 0.5
             data_scale = 1.0
@@ -138,6 +140,12 @@ def main():
                 loss_scale = float(args.ae_loss[7:])
             print("Using loss 'tanhMSE' with scaling {}".format(loss_scale))
             loss = tanhMSE(scale=loss_scale)
+        loss = Loss(
+            loss_type=getattr(LossType, loss_name),
+            loss_ratio=0.5,
+            data_input_scale=1.0
+        )
+        
         autoencoder.set_loss(loss)
 
     # Loading from checkpoint
@@ -153,7 +161,8 @@ def main():
         # Plot Callback
         train_eval_data = dataset.val.pressure.data[0]
         
-        plot_eval_callback = PlotRealsCallback(autoencoder, train_eval_data, fs["eval/"], "Pressure_Eval_Plot")
+        plot_eval_callback = PlotRealsAndSlicesCallback(autoencoder, train_eval_data, fs["eval/"],
+         ["Pressure_Eval_Plot", "Pressure_Eval_Slice"])
         # training
         train_hist = autoencoder.train(dataset=dataset, epochs=args.ae_epochs, batch_size=settings.ae.batch_size, augment=True, plot_evaluation_callback=plot_eval_callback)
         # save model only if training has happened

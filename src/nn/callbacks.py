@@ -52,6 +52,26 @@ class PlotRealsCallback(Callback):
         self._plotter.save_figures(self._out_dir, filename=self._filename, filetype="png")
 
 #---------------------------------------------------------------------------------
+class PlotRealsAndSlicesCallback(Callback):
+    def __init__(self, model, x, output_directory, filenames):
+        self._model = model
+        self._x = x[np.newaxis, ...]
+        self._filenames = filenames
+        assert len(filenames) == 2, 'Filenames must have two names'
+        self._out_dir = output_directory
+        self._plotter_real = Plotter()
+        self._plotter_slice = Plotter()
+
+    def on_epoch_end(self, acc, loss):
+        self._y = self._model.predict(self._x)
+        self._plotter_real.plot_heatmap(self._x[0], self._y[0])
+        self._plotter_real.show(False)
+        self._plotter_real.save_figures(self._out_dir, filename=self._filenames[0], filetype="png")
+        self._plotter_slice.plot_slice(self._x[0], self._y[0], x_slice=0.5)
+        self._plotter_slice.show(False)
+        self._plotter_slice.save_figures(self._out_dir, filename=self._filenames[1], filetype="png")
+
+#---------------------------------------------------------------------------------
 class StatefulResetCallback(Callback):
     def __init__(self, model):
         self.model = model

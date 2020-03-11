@@ -141,6 +141,8 @@ class SceneList(object):
 
     #------------------------------------------------------------------------------------------------
     def save_histogram(self, path="."):
+        import matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         data = self.data.flatten()
         fig, ax = plt.subplots( nrows=1, ncols=1 )  # create figure & 1 axis

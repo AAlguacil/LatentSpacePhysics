@@ -22,9 +22,9 @@
 if __name__ == "__main__":
     import matplotlib
     matplotlib.use('TkAgg')
-
-from matplotlib import pyplot as plt
 import matplotlib
+matplotlib.use('Agg')
+from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.widgets as wgt
 from matplotlib.ticker import MaxNLocator
@@ -305,7 +305,73 @@ class Plotter(object):
         ax2.get_yaxis().set_visible(False)
         fig.suptitle(title, fontsize=20)
         self._figures.append(fig)
-    
+
+    def plot_slice(self, x, y, title="", vmin=None, vmax=None, **kwargs):
+        assert len(kwargs.keys()) == 1, 'Only one slice allowed'
+        if 'x_slice' in kwargs:
+            slice_type = 'x'
+            _slice = kwargs['x_slice']
+        elif 'y_slice' in kwargs:
+            slice_type = 'y'
+            _slice = kwargs['y_slice']
+        else:
+            assert False, 'kwargs must be either x_slice or y_slice'
+        if not vmin:
+            vmin = np.amin(x)
+        if not vmax:
+            vmax = np.amax(x)
+
+        dxd0 = np.gradient(x, axis=0)
+        dyd0 = np.gradient(y, axis=0)
+        dxd1 = np.gradient(x, axis=1)
+        dyd1 = np.gradient(y, axis=1)
+
+        if slice_type == 'x':
+            nx = x.shape[0]
+            x_slice = x[int(_slice*nx),:,0]
+            y_slice = y[int(_slice*nx),:,0]
+            dxd0_slice = dxd0[int(_slice*nx),:,0]
+            dyd0_slice = dyd0[int(_slice*nx),:,0]
+            dxd1_slice = dxd1[int(_slice*nx),:,0]
+            dyd1_slice = dyd1[int(_slice*nx),:,0]
+        if slice_type == 'y':
+            ny = x.shape[1]
+            x_slice = x[:,int(_slice*ny),0]
+            y_slice = y[:,int(_slice*ny),0]
+            dxd0_slice = dxd0[:,int(_slice*nx),0]
+            dyd0_slice = dyd0[:,int(_slice*nx),0]
+            dxd1_slice = dxd1[:,int(_slice*nx),0]
+            dyd1_slice = dyd1[:,int(_slice*nx),0]
+
+        fig, [ax1, ax2, ax3] = plt.subplots(1, 3, figsize=(16, 8))
+        fig.tight_layout(pad=0.1)
+        im1 = ax1.plot(x_slice, label='Reference')
+        im1 = ax1.plot(y_slice, label='Predicted')
+        ax1.set_title("value", fontsize=20)
+        x0,x1 = ax1.get_xlim()
+        y0,y1 = ax1.get_ylim()
+        ax1.set_aspect((x1-x0)/(y1-y0))
+        ax1.legend()
+        
+        im2 = ax2.plot(dxd0_slice, label='Reference')
+        im2 = ax2.plot(dyd0_slice, label='Predicted')
+        ax2.set_title("x-gradient", fontsize=20)
+        x0,x1 = ax2.get_xlim()
+        y0,y1 = ax2.get_ylim()
+        ax2.set_aspect((x1-x0)/(y1-y0))
+        ax2.legend()
+        
+        im3 = ax3.plot(dxd1_slice, label='Reference') 
+        im3 = ax3.plot(dyd1_slice, label='Predicted') 
+        ax3.set_title("y-gradient", fontsize=20)
+        x0,x1 = ax3.get_xlim()
+        y0,y1 = ax3.get_ylim()
+        ax3.set_aspect((x1-x0)/(y1-y0))
+        ax3.legend()
+
+        fig.suptitle(title, fontsize=20)
+        self._figures.append(fig)
+
     #---------------------------------------------------------------------------------
     def plot_single(self, x, title="", vmin=None, vmax=None, plot_colorbar=True):
         fig, ax1 = plt.subplots(1, 1, figsize=(8, 8))

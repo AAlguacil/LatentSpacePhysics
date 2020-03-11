@@ -28,6 +28,7 @@ from keras import regularizers
 import math
 import numpy as np
 from enum import Enum
+from util.derivatives import ddx, ddy
 
 #=====================================================================================
 class LossType(Enum):
@@ -39,6 +40,10 @@ class LossType(Enum):
     weighted_mae_rmse = 6
     binary_crossentropy = 7
     weighted_tanhmse_mse = 8
+    gdl_l1 = 9
+    weighted_mae_gdl = 10
+    gdl_l2 = 11
+    weighted_mse_gdl = 12
 
 class Loss(object):
     def __init__(self, loss_type=LossType.mae, **kwargs):
@@ -57,11 +62,19 @@ class Loss(object):
                 )]
         return info
 
+    #def _debug_print_funct(self, y_true, y_pred):
+    #    print('y_true shape : {}'.format(y_true.shape))
+    #    print('y_pred shape : {}'.format(y_pred.shape))
+    #    return False
+
     def __call__(self, y_true, y_pred):
         result = None
         if self.loss_type == LossType.mae:
             result = objectives.mean_absolute_error(y_true, y_pred)
         elif self.loss_type == LossType.mse:
+            #debug_print_op = tf.py_func(self._debug_py_funcprint_funct, [y_true, y_pred], [tf.bool])
+            #with tf.control_dependencies(debug_print_op):
+            #    y_true = tf.identity(y_true, name='loss_print')
             result = objectives.mean_squared_error(y_true, y_pred)
         elif self.loss_type == LossType.rmse:
             result = K.sqrt(objectives.mean_squared_error(y_true, y_pred))
@@ -81,10 +94,29 @@ class Loss(object):
             loss1 = losses.mean_squared_error(K.tanh(self.data_input_scale*y_true), K.tanh(self.data_input_scale*y_pred))
             loss2 = losses.mean_squared_error(y_true, y_pred)
             result = self.loss_ratio*loss1+(1.0- self.loss_ratio)*loss2
+        elif self.loss_type == LossType.gdl_l1:
+            result = self._gdl(y_true, y_pred, alpha=1)
+        elif self.loss_type == LossType.weighted_mae_gdl:
+            loss1 = self._gdl(y_true, y_pred, alpha=1)
+            loss2=objectives.mean_absolute_error(y_true, y_pred)
+            result = self.loss_ratio*loss1+(1.0- self.loss_ratio)*loss2
+        elif self.loss_type == LossType.gdl_l2:
+            result = self._gdl(y_true, y_pred, alpha=2)
+        elif self.loss_type == LossType.weighted_mse_gdl:
+            loss1 = self._gdl(y_true, y_pred, alpha=2)
+            loss2 = losses.mean_squared_error(y_true, y_pred)
+            result = self.loss_ratio*loss1+(1.0- self.loss_ratio)*loss2
         else:
             assert False, ("Loss function not supported")
 
         return result
+
+    def _gdl(self, y_true, y_pred, alpha=2):
+        t1 = K.pow(K.abs(ddx(y_true) - ddx(y_pred)), alpha)
+        t2 = K.pow(K.abs(ddy(y_true) - ddy(y_pred)), alpha)
+        loss = K.mean(t1 + t2)
+        return loss
+    
 
 #=====================================================================================
 class tanhMSE(object):
@@ -303,4 +335,22 @@ class PressureDivergence(object):
     #---------------------------------------------------------------------------------
     def __call__(self, y_true, y_pred):
         return
+
+#=====================================================================================
+class GradientDifferenceLoss(object):
+    """ Gradient difference loss from Mathieu et al. - 
+    Deep multi-scale video prediction beyond mean square error """
+    #---------------------------------------------------------------------------------
+    def __init__(self, weight=1.0, alpha=2, name="GDL loss"):
+        self._weight = weight
+        self.alpha = alpha
+        self.__name__ = name
     
+    #---------------------------------------------------------------------------------
+    def __call__(self, y_true, y_pred):
+        t1 = K.pow(K.abs(y_true[:, :, 1:, :] - y_true[:, :, :-1, :]) -
+                   K.abs(y_pred[:, :, 1:, :] - y_pred[:, :, :-1, :]), alpha)
+        t2 = K.pow(K.abs(y_true[:, :, :, :-1] - y_true[:, :, :, 1:]) -
+                   K.abs(y_pred[:, :, :, :-1] - y_pred[:, :, :, 1:]), alpha)
+        loss = self._weight * K.mean(t1 + t2)
+        return loss

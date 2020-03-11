@@ -2,7 +2,7 @@
     "dataset": {
         "pressure_static_normalization_factor": 3.0,
         "pressure_dynamic_normalization_factor": 5.5,
-        "pressure_normalization_factor": 3.8,
+        "pressure_normalization_factor": 0.0007204466104511198,
         "velocity_normalization_factor": 5.7,
         "pressure_encoded_normalization_factor": 3.0,
         "pressure_encoded_total_normalization_factor": 3.5,
@@ -13,7 +13,7 @@
         "pressure_density_encoded_gas_normalization_factor": 3.3
     },
     "ae": {
-        "batch_size": 4,
+        "batch_size": 16,
         "code_layer_size": 2048,
         "dropout": 0.0,
         "learning_rate": 0.00015,
@@ -46,7 +46,7 @@
         "noise_probability": 0.3
     },
     "project": {
-        "name": "default",
+        "name": "acoustics",
         "path": "../projects/"
     }
 }

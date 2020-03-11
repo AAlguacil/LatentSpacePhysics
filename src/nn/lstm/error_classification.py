@@ -20,6 +20,8 @@
 #******************************************************************************
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import datetime

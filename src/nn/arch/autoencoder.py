@@ -962,6 +962,10 @@ class Autoencoder2D(Network):
                 loss_type=LossType.weighted_tanhmse_mse,
                 loss_ratio=1.0,
                 data_input_scale=1.0))
+            self.metrics.append(Loss(
+                loss_type=LossType.gdl_l2,
+                loss_ratio=1.0,
+                data_input_scale=1.0))
 
     #---------------------------------------------------------------------------------
     def _init_optimizer(self, epochs=1):
