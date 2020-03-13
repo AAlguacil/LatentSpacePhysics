@@ -32,12 +32,13 @@ from pathlib import Path
 import itertools
 import numpy as np
 import tensorflow as tf
+from keras import callbacks
 
 from nn.arch.autoencoder import Autoencoder, Autoencoder2D
 from nn.arch.lstm import Lstm
 from nn.lstm.error_classification import restructure_encoder_data
 from nn.lstm.sequence_training_data import TrainingData, TrainingDataType
-from nn.callbacks import PlotRealsCallback, PlotRealsAndSlicesCallback
+from nn.callbacks import PlotLosses, PlotRealsCallback, PlotRealsAndSlicesCallback, TrainValTensorBoard
 from nn.losses import tanhMSE, Loss, LossType
 
 from util import evaluation
@@ -161,10 +162,19 @@ def main():
         # Plot Callback
         train_eval_data = dataset.val.pressure.data[0]
         
-        plot_eval_callback = PlotRealsAndSlicesCallback(autoencoder, train_eval_data, fs["eval/"],
-         ["Pressure_Eval_Plot", "Pressure_Eval_Slice"])
+        plot_loss_hist_callback = TrainValTensorBoard(log_dir=fs["eval/logs"]) 
+        #plot_loss_hist_callback = callbacks.TensorBoard(log_dir=fs["eval/logs"], histogram_freq=0)
+        plot_eval_callback = None #PlotRealsAndSlicesCallback(autoencoder, train_eval_data, fs["eval/"],
+         #["Pressure_Eval_Plot", "Pressure_Eval_Slice"])
+        #plot_loss_hist_callback = PlotLosses(fs["eval/"], 'Losses')
         # training
-        train_hist = autoencoder.train(dataset=dataset, epochs=args.ae_epochs, batch_size=settings.ae.batch_size, augment=True, plot_evaluation_callback=plot_eval_callback)
+        train_hist = autoencoder.train(
+            dataset=dataset,
+            epochs=args.ae_epochs, 
+            batch_size=settings.ae.batch_size, 
+            augment=True,
+            plot_loss_hist_callback=plot_loss_hist_callback, 
+            plot_evaluation_callback=plot_eval_callback)
         # save model only if training has happened
         if (args.ae_epochs != 0):
             autoencoder.save_model(fs[""])
@@ -178,7 +188,13 @@ def main():
 
     # Evaluation & Plot
     if args.ae_evaluate:
-        evaluation.evaluate_autoencoder(autoencoder, dataset, fs, pretrain_hist, train_hist, evaluation.QuantityType.TotalPressure)
+        evaluation.evaluate_autoencoder(
+            autoencoder, 
+            dataset, 
+            fs, 
+            pretrain_hist, 
+            train_hist, 
+            evaluation.QuantityType.TotalPressure)
 
     # At this point the description must have been stored already, except we do not use the AE at all
     if not autoencoder_desc and not args.norm_desc:

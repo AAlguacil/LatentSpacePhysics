@@ -616,9 +616,6 @@ class PressureWidget(object):
         self.radio.on_clicked(radio_update)
 
 
-
-
-
 #=====================================================================================
 class PlotterLatentSpace(Plotter):
     """ Plotter for decoded latent space fields """
@@ -748,27 +745,31 @@ class LatentSpaceWidget(object):
 #=====================================================================================
 class LossPlotter(object):
     """ Plot train and validation loss """
-    def __init__(self):
-        self.train_losses = {}
-        self.val_losses = {}
-        self.fig = plt.figure()
-        self.ax = self.fig.add_subplot(1,1,1)
-        plt.ion()
-        self.train_graph, = self.ax.plot([0], [0])
-        self.val_graph, = self.ax.plot([0], [0])
-        #plt.pause(0.05)
+    def __init__(self, path, filename):
+        self.path = path
+        self.filename = filename
+        self._init_figure()
 
-    def on_loss(self, train_losses, val_losses):
-        self.train_losses = train_losses
-        self.val_losses = val_losses
-        self.train_graph.set_xdata(list(self.train_losses.keys()))
-        self.train_graph.set_ydata(list(self.train_losses.values()))
-        self.val_graph.set_xdata(list(self.val_losses.keys()))
-        self.val_graph.set_ydata(list(self.val_losses.values()))
-        plt.draw()
-        #plt.pause(0.0001)
-        #plt.pause(0.05)
-        #plt.show(block=False)
+    def _init_figure(self):
+        self.fig, self.ax = plt.subplots(1,1,figsize=(15,15))
+
+    def _save_figures(self, path, filename="figure", filetype="png"):
+        if not isinstance(threading.current_thread(), threading._MainThread):
+            print("[WARNING] Current thread is not the main thread. Aborting save_figures call...")
+            return
+
+        # if len(self._figures) == 1:
+        #     self._figures[0].savefig(path + "{}.{}".format(filename, filetype), bbox_inches='tight')
+        # else:
+        self.fig.savefig(path + "{}.{}".format(filename, filetype), bbox_inches='tight')
+        plt.close(self.fig)
+        self._init_figure()
+
+    def __call__(self, x, losses, val_losses):
+        self.ax.semilogy(x, losses, label="loss")
+        self.ax.semilogy(x, val_losses, label="val_loss")
+        self.ax.legend()
+        self._save_figures(path=self.path, filename=self.filename)
 
 
 

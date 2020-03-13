@@ -349,8 +349,8 @@ class GradientDifferenceLoss(object):
     #---------------------------------------------------------------------------------
     def __call__(self, y_true, y_pred):
         t1 = K.pow(K.abs(y_true[:, :, 1:, :] - y_true[:, :, :-1, :]) -
-                   K.abs(y_pred[:, :, 1:, :] - y_pred[:, :, :-1, :]), alpha)
+                   K.abs(y_pred[:, :, 1:, :] - y_pred[:, :, :-1, :]), self.alpha)
         t2 = K.pow(K.abs(y_true[:, :, :, :-1] - y_true[:, :, :, 1:]) -
-                   K.abs(y_pred[:, :, :, :-1] - y_pred[:, :, :, 1:]), alpha)
+                   K.abs(y_pred[:, :, :, :-1] - y_pred[:, :, :, 1:]), self.alpha)
         loss = self._weight * K.mean(t1 + t2)
         return loss

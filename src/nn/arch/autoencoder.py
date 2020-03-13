@@ -20,7 +20,8 @@
 #******************************************************************************
 
 
-import keras
+#import keras
+import tensorflow as tf
 from keras.optimizers import Adam
 from keras import objectives
 from keras.layers import *
@@ -29,7 +30,6 @@ from keras.models import Model, save_model, load_model
 import logging
 import keras.backend as K
 from keras.utils.generic_utils import get_custom_objects
-import tensorflow as tf
 from functools import partial
 
 #from helpers.upsampling import *
@@ -286,13 +286,14 @@ class Autoencoder(Network):
         assert dataset is not None, ("You must provide a dataset argument to autoencoder train")
         batch_size = kwargs.get("batch_size", 32) 
         augment = kwargs.get("augment", False)
+        plot_callback = kwargs.get("plot_callback", None)
         
         # pretrain if enabled
         if not kwargs.get("disable_pretrain", False):
             self._pretrain(dataset=dataset, epochs=self.pretrain_epochs, batch_size=batch_size, augment=augment)
         
         # do the actual training
-        return self._train_full_model(dataset=dataset, epochs=epochs, batch_size=batch_size, augment=augment)
+        return self._train_full_model(dataset=dataset, epochs=epochs, batch_size=batch_size, plot_callback=plot_callback, augment=augment)
 
     #---------------------------------------------------------------------------------
     def _pretrain(self, dataset, epochs = 10, batch_size=128, plot_callback=None, augment=False, noise=False):
@@ -1224,13 +1225,21 @@ class Autoencoder2D(Network):
         assert dataset is not None, ("You must provide a dataset argument to autoencoder train")
         batch_size = kwargs.get("batch_size", 32) 
         augment = kwargs.get("augment", False)
+        plot_loss_hist_callback = kwargs.get("plot_loss_hist_callback", None)
+        plot_evaluation_callback = kwargs.get("plot_evaluation_callback", None) 
         
         # pretrain if enabled
         if not kwargs.get("disable_pretrain", False):
             self._pretrain(dataset=dataset, epochs=self.pretrain_epochs, batch_size=batch_size, augment=augment)
         
         # do the actual training
-        return self._train_full_model(dataset=dataset, epochs=epochs, batch_size=batch_size, augment=augment, plot_evaluation_callback=kwargs.get("plot_evaluation_callback", None))
+        return self._train_full_model(
+            dataset=dataset,
+            epochs=epochs,
+            batch_size=batch_size, 
+            plot_loss_hist_callback=plot_loss_hist_callback, 
+            plot_evaluation_callback=plot_evaluation_callback, 
+            augment=augment)
 
     #---------------------------------------------------------------------------------
     def _pretrain(self, dataset, epochs = 10, batch_size=128, plot_callback=None, augment=False, noise=False):
@@ -1288,8 +1297,7 @@ class Autoencoder2D(Network):
         hist = None
         callbacks = []
         if plot_loss_hist_callback is not None:
-            loss_hist = LossHistory(plot_loss_hist_callback)
-            callbacks.append(loss_hist)
+            callbacks.append(plot_loss_hist_callback)
         if plot_evaluation_callback is not None:
             callbacks.append(plot_evaluation_callback)
 
