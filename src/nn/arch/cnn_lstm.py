@@ -18,36 +18,116 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 #******************************************************************************
+import tensorflow as tf
 
 import keras.backend as K
-from keras.models import Model, load_model
-from keras.layers import Input, Merge, RepeatVector, Add, LSTM, GRU, TimeDistributed, Dense, Reshape, Activation, Dropout, merge, Lambda, Bidirectional, Conv1D, Flatten
-from keras.optimizers import RMSprop
+from keras.models import Model, save_model, load_model
+import keras.layers as layers
+# Input, Merge, RepeatVector, Add, LSTM, GRU, TimeDistributed, Dense, Reshape, Activation, Dropout, merge, Lambda, Bidirectional, Conv1D, Flatten
+from keras.layers.pooling import AveragePooling2D, MaxPooling2D
+from keras.optimizers import Adam, RMSprop
 from keras.regularizers import l1_l2, l2
+from keras import objectives
 from keras.losses import mean_absolute_error, mean_squared_error, mean_squared_logarithmic_error
+from keras.utils.generic_utils import get_custom_objects
 
 import argparse
 import time
 import numpy as np
 import random
+import logging
+from functools import partial
 
-from ..helpers import print_weight_summary, make_layers_trainable
-from ..callbacks import StatefulResetCallback
+from ..helpers import *
+from ..callbacks import StatefulResetCallback, LossHistory
 from ..losses import Loss, LossType
+from ..stages import *
+from ..metrics import KLDivergence
 
 from ..lstm import error_classification
 from util import array
 from math import floor
 
-from .architecture import Network
+from nn.arch.architecture import Network
 
-class Lstm(Network):
-    """ Long Short Term Memory for prediction of future code layer values """
+def _sampling(args):
+    z_mean, z_log_sigma = args
+    epsilon = K.random_normal(shape=(K.shape(z_mean)[0], K.shape(z_mean)[1]), mean=0.0, stddev=0.2)
+    return z_mean + K.exp(z_log_sigma) * epsilon
+
+def convert_shape(shape):
+    out_shape = []
+    for i in shape:
+        try:
+            out_shape.append(int(i))
+        except:
+            out_shape.append(None)
+    return out_shape
+
+class CnnLstm(Network):
+    """ Coupled CNN-LSTM for encoding-prediction-decoding """
     #---------------------------------------------------------------------------------
     def _init_vars(self, **kwargs):
+        self.model_name = "CNN_LSTM"
+        self._init_vars_ae(**kwargs)
+        self._init_vars_lstm(**kwargs)
+        self.init_func = "glorot_normal"
+        self.tensorflow_seed = kwargs.get("tensorflow_seed", 4)
+        tf.set_random_seed(self.tensorflow_seed)
+        
+        # Models
+        self._encoder = None
+        self._decoder = None
+        self._predictor = None
+        self.model = None
+        
+        # Variables
+        self.kernel_regularizer = None #5e-8
+        self.recurrent_regularizer = None #5e-8
+        self.bias_regularizer = None #5e-8
+        self.activity_regularizer = None #5e-8
+
+        self.dropout=0.0132 # hyperparameter checked
+        self.recurrent_dropout=0.385 # hyperparameter checked
+        
+        # Optimizer
+        # adam
+        self.adam_epsilon = None #1e-8 # 1e-3
+        self.adam_learning_rate = 0.001
+        self.adam_lr_decay = 0.0005 #1e-5
+        
+        # rms-prop
+        self.learning_rate = 0.000126 # hyperparameter checked
+        self.lr_decay = 0.000334 # hyperparameter checked (for 100 scenes / 20 epochs)
+        self.use_bias = True
+
+    #---------------------------------------------------------------------------------
+    def _init_vars_ae(self, **kwargs):
+        self.surface_kernel_size_ae = 4
+        self.kernel_size_ae = 2
+        self.input_shape_ae = kwargs.get("input_shape", (64, 64, 1))
+        self.set_loss(loss=kwargs.get("loss", "mse"))
+        self.l1_reg_ae = kwargs.get("l1_reg", 0.0)
+        self.l2_reg_ae = kwargs.get("l2_reg", 0.0)
+    
+    def set_loss(self, loss):
+        self.loss_ae = loss
+        self.metrics_ae = ["mae"]
+        if not isinstance(self.loss_ae, str):
+            self.metrics_ae = ["mse", "mae"]
+            self.metrics_ae.append(Loss(
+                loss_type=LossType.weighted_tanhmse_mse,
+                loss_ratio=1.0,
+                data_input_scale=1.0))
+            self.metrics_ae.append(Loss(
+                loss_type=LossType.gdl_l2,
+                loss_ratio=1.0,
+                data_input_scale=1.0))
+
+    #---------------------------------------------------------------------------------
+    def _init_vars_lstm(self, **kwargs):
         settings = kwargs.get("settings")
         # Training Settings
-        self.model_name = "LSTM"
         self.data_dimension = kwargs.get("data_dimension", settings.ae.code_layer_size)
         self.time_steps = settings.lstm.time_steps
         self.stateful = settings.lstm.stateful
@@ -74,60 +154,181 @@ class Lstm(Network):
         self.use_noisy_training = settings.lstm.use_noisy_training
         self.noise_probability = settings.lstm.noise_probability
 
-        # Model
-        self.model = None
-
-        # Variables
-        self.kernel_regularizer = None #5e-8
-        self.recurrent_regularizer = None #5e-8
-        self.bias_regularizer = None #5e-8
-        self.activity_regularizer = None #5e-8
-
-        self.dropout=0.0132 # hyperparameter checked
-        self.recurrent_dropout=0.385 # hyperparameter checked
-
-        self.learning_rate = 0.000126 # hyperparameter checked
-        self.decay = 0.000334 # hyperparameter checked (for 100 scenes / 20 epochs)
-        self.use_bias = True
 
         # Loss
         self.lstm_loss = settings.lstm.loss # Loss(LossType.mae)
 
     #---------------------------------------------------------------------------------
     def _init_optimizer(self, epochs=1):
-        self.lstm_optimizer = RMSprop(  lr=self.learning_rate,
-                                        rho=0.9,
-                                        epsilon=1e-08,
-                                        decay=self.decay)#,
+        #self.optimizer = Adam(lr=self.adam_learning_rate, epsilon=self.adam_epsilon, decay=self.adam_lr_decay)
+        self.kernel_regularizer = layers.regularizers.l1_l2(l1=self.l1_reg_ae, l2=self.l2_reg_ae)
+        self.optimizer = Adam(lr=self.adam_learning_rate, epsilon=self.adam_epsilon, decay=self.adam_lr_decay)
+        #self.optimizer = RMSprop(  lr=self.learning_rate,
+        #                                rho=0.9,
+        #                                epsilon=1e-08,
+        #                                decay=self.decay)#,
                                         #clipnorm=0.5)
-        return self.lstm_optimizer
+        return self.optimizer
 
     #---------------------------------------------------------------------------------
     def _compile_model(self):
-        self.model.compile( loss=self.lstm_loss,
-                            optimizer=self.lstm_optimizer,
-                            metrics=['mean_squared_error', 'mean_absolute_error'])
-
+        pass
+        #self.model.compile( loss=self.lstm_loss,
+        #                    optimizer=self.lstm_optimizer,
+        #                    metrics=['mean_squared_error', 'mean_absolute_error'])
+    
     #---------------------------------------------------------------------------------
     def _build_model(self):
         """ build the model """
-        inputs = Input(shape=(self.time_steps, self.data_dimension), dtype="float32", name='main_input')
-        print('LSTM: Input Shape')
-        print(inputs.shape)
+        self._build_encoder()
+        self._build_lstm()
+        self._build_decoder()
+
+        inputs = []
+        lstm_inputs = []
+        outputs = []
+        losses = {}
+        loss_weights = {}
+        #self.time_steps
+        #self.out_time_steps
+        encoder = self._encoder()
+        predictor = self._predictor()
+        decoder = self._decoder()
+
+        assert self.time_steps > 0, "Input time steps must be greater than 0"
+        for i in range(self.time_steps):
+            input_i = layers.Input(shape=self.input_shape_ae)
+            inputs.append(input_i)
+            ls_i = encoder(input_i)
+            lstm_inputs.append(ls_i)
+
+        if self.standalone_ae_training:
+            out_ae_alone = encoder(inputs[0])
+            out_ae_alone.name = 'AE_direct'
+            losses[out_ae_alone.name] = self.loss_ae
+            loss_weights[out_ae_alone.name] = 1.0
+            outputs.append(out_ae_alone)
+        
+        for i in range(self.out_time_steps):
+            x = layers.concatenate(lstm_inputs, axis=0)
+            out_lstm = predictor(x)
+            out_i = decoder(out_lstm)
+            out_i.name = 'AE_pred_{}'.format(i)
+            loss_weights[out_i_alone.name] = 1.0 
+            outputs.append(out_i)
+
+            # Remove first element and add last predicition at the end
+            del lstm_inputs[0]
+            lstm_inputs.append(out_lstm)
+
+        self.model = Model(inputs=inputs, outputs=outputs) 
+        self.model.compile(optimizer=self.optimizer,
+                           loss=losses, loss_weights=loss_weights,
+                           metrics=self.metrics_ae)
+
+    def _build_encoder(self):
+        input_shape = self.input_shape_ae
+        encoder_input = layers.Input(shape=input_shape)
+        if self.repeat_ae == 0:
+            repeat_num = int(np.log2(np.max(input_shape[:-1]))) - 2
+        else:
+            repeat_num = self.repeat_ae
+        assert(repeat_num > 0 and np.sum([i % np.power(2, repeat_num-1) for i in input_shape[:-1]]) == 0)
+        
+        ch = self.filters_ae
+        layer_num = 0
+        x = layers.Conv2D(ch, self.surface_kernel_size_ae, strides=(1, 1), padding='same', kernel_initializer=self.init_func, kernel_regularizer=self.kernel_regularizer)(encoder_input)
+        x = layers.LeakyReLU(alpha=0.2)(x)
+        x = layers.BatchNormalization()(x)
+        x0 = x
+        layer_num += 1
+        for idx in range(repeat_num):
+            for _ in range(self.num_conv_ae):
+                x = layers.Conv2D(self.filters_ae, self.surface_kernel_size_ae, strides=(1, 1), padding='same', kernel_initializer=self.init_func, kernel_regularizer=self.kernel_regularizer)(x)
+                x = layers.LeakyReLU(alpha=0.2)(x)
+                x = layers.BatchNormalization()(x)
+                layer_num += 1
+
+            # skip connection
+            x = layers.Concatenate(axis=-1)([x, x0])
+            ch += self.filters
+
+            if idx < repeat_num - 1:
+                x = layers.Conv2D(ch, self.surface_kernel_size_ae, strides=(2, 2), padding='same', kernel_initializer=self.init_func, kernel_regularizer=self.kernel_regularizer)(x)
+                x = layers.LeakyReLU(alpha=0.2)(x)
+                x = layers.BatchNormalization()(x)
+                layer_num += 1
+                x0 = x
+
+        flat = layers.Reshape((-1))(x)
+
+        # Fully-connected layer        
+        x = layers.Dense(self.data_dimension)(flat)
+        out = layers.Activation('linear')(x)
+
+        self._encoder = Model(encoder_input, out)
+
+    #---------------------------------------------------------------------------------
+    def _build_decoder(self):
+        output_shape = self.input_shape_ae
+        decoder_input = Input(shape=(None, None, self.data_dimension))
+        if self.repeat_ae == 0:
+            repeat_num = int(np.log2(np.max(output_shape[:-1]))) - 2
+        else:
+            repeat_num = self.repeat_ae
+        assert(repeat_num > 0 and np.sum([i % np.power(2, repeat_num-1) for i in output_shape[:-1]]) == 0)
+
+        x0_shape = [int(i/np.power(2, repeat_num-1)) for i in output_shape[:-1]] + [self.filters]
+        print('first layer:', x0_shape, 'to', output_shape)
+
+        num_output = int(np.prod(x0_shape))
+        layer_num = 0
+        x = layers.Dense(num_output)(decoder_input)
+        layer_num += 1
+        x = layers.Reshape((x0_shape[0], x0_shape[1], x0_shape[2]))(x)
+        x0 = x
+        
+        for idx in range(repeat_num):
+            for _ in range(self.num_conv_ae):
+                x = layers.Conv2D(self.filters, self.kernel_size_ae, strides=(1, 1), padding='same', kernel_initializer=self.init_func, kernel_regularizer=self.kernel_regularizer)(x)
+                x = layers.LeakyReLU(alpha=0.2)(x)
+                x = layers.BatchNormalization()(x)
+                layer_num += 1
+
+            if idx < repeat_num - 1:
+                if self.skip_concat:
+                    x = layers.UpSampling2D(size=(2, 2))(x)
+                    x0 = layers.UpSampling2D(size=(2, 2))(x0)
+                    x = layers.Concatenate(axis=-1)([x, x0])
+                else:
+                    x = layers.Add()([x, x0])
+                    x = layers.UpSampling2D(size=(2, 2))(x)
+                    x0 = x
+
+            elif not self.skip_concat:
+                x = layers.Add()([x, x0])
+        
+        x = layers.Conv2D(output_shape[-1], self.last_kernel_ae, strides=(1, 1), padding='same', kernel_initializer=self.init_func, kernel_regularizer=self.kernel_regularizer)(x)
+        out = layers.Activation('linear')(x)
+        
+        self._decoder = Model(decoder_input, out)
+        self._decoder.name = "Decoder"
+
+    #---------------------------------------------------------------------------------
+    def _build_lstm(self):
+        inputs = layers.Input(shape=(self.time_steps, self.data_dimension), dtype="float32", name='lstm_input')
         x = inputs
 
         if self.use_time_conv_encoder:
             # Transforms from shape (None, time_steps, dimension) to (None, 1, filters)
-            enc_time_conv = Conv1D(filters=self.time_conv_encoder_filters, padding="causal", kernel_size=self.time_conv_encoder_kernel, dilation_rate=self.time_conv_encoder_dilation)
+            enc_time_conv = layers.Conv1D(filters=self.time_conv_encoder_filters, padding="causal", kernel_size=self.time_conv_encoder_kernel, dilation_rate=self.time_conv_encoder_dilation)
             time_conv_encoder_shape = enc_time_conv.compute_output_shape(input_shape=(None, self.time_steps, self.data_dimension))
             assert time_conv_encoder_shape[1] == self.time_steps, ("TimeConv shape transformation failed. Result is '{}'".format(time_conv_encoder_shape))
-            print('LSTM: ConvEncoder')
-            print(time_conv_encoder_shape)
             x = enc_time_conv(x)
 
             # deep time convolutions (won't change the shape)
             for i in range(self.time_conv_encoder_depth):
-                x = Conv1D(filters=self.time_conv_encoder_filters, kernel_size=1)(x)
+                x = layers.Conv1D(filters=self.time_conv_encoder_filters, kernel_size=1)(x)
                 x = Activation('tanh')(x)
 
         if self.use_deep_encoder:
@@ -143,14 +344,14 @@ class Lstm(Network):
                                             return_sequences=True,
                                             bidirectional=False,
                                             use_gru=False)
-            xtmp = Add()([x1,x2])
+            xtmp = layers.Add()([x1,x2])
             x3 = self._add_RNN_layer_func(  previous_layer=xtmp,
                                             output_dim=self.encoder_lstm_neurons,
                                             go_backwards=False,
                                             return_sequences=True,
                                             bidirectional=False,
                                             use_gru=False)
-            xtmp = Add()([xtmp,x3])
+            xtmp = layers.Add()([xtmp,x3])
             x = self._add_RNN_layer_func(   previous_layer=xtmp,
                                             output_dim=self.encoder_lstm_neurons,
                                             go_backwards=False,
@@ -160,27 +361,33 @@ class Lstm(Network):
         else:
             x = self._add_RNN_layer_func(   previous_layer=x,
                                             output_dim=self.encoder_lstm_neurons,
-                                            go_backwards=True,
+                                            go_backwards=False,
+                                            return_sequences=False,
+                                            bidirectional=self.use_bidirectional,
+                                            use_gru=False)
+            x = self._add_RNN_layer_func(   previous_layer=x,
+                                            output_dim=self.encoder_lstm_neurons,
+                                            go_backwards=False,
                                             return_sequences=False,
                                             bidirectional=self.use_bidirectional,
                                             use_gru=False)
 
-        x = RepeatVector(self.out_time_steps)(x)
-        x = self._add_RNN_layer_func(   previous_layer=x,
-                                        output_dim=self.decoder_lstm_neurons,
-                                        go_backwards=False,
-                                        return_sequences=True,
-                                        bidirectional=self.use_bidirectional,
-                                        use_gru=False)
+        x = layers.RepeatVector(self.out_time_steps)(x)
         
         if self.use_time_conv_decoder:
             for i in range(self.time_conv_decoder_depth):
-                x = Conv1D(filters=self.time_conv_decoder_filters, kernel_size=1)(x)
-                x = Activation('tanh')(x)
-            x = Conv1D(filters=self.data_dimension, kernel_size=1)(x)
+                x = layers.Conv1D(filters=self.time_conv_decoder_filters, kernel_size=1)(x)
+                x = layers.Activation('tanh')(x)
+            x = layers.Conv1D(filters=self.data_dimension, kernel_size=1)(x)
             if self.out_time_steps == 1:
-                x = Flatten()(x)
+                x = layers.Flatten()(x)
         else:
+            x = self._add_RNN_layer_func(   previous_layer=x,
+                                            output_dim=self.decoder_lstm_neurons,
+                                            go_backwards=False,
+                                            return_sequences=True,
+                                            bidirectional=self.use_bidirectional,
+                                            use_gru=False)
             x = self._add_RNN_layer_func(   previous_layer=x,
                                             output_dim=self.data_dimension,
                                             go_backwards=False,
@@ -190,7 +397,8 @@ class Lstm(Network):
 
         outputs = x
 
-        self.model = Model(inputs=inputs, outputs=outputs)
+        self._predictor = Model(inputs=inputs, outputs=outputs)
+        self._predictor.name = "Predictor"
 
     #---------------------------------------------------------------------------------
     def _inner_RNN_layer(self, use_gru, output_dim, go_backwards, return_sequences):
@@ -203,7 +411,7 @@ class Lstm(Network):
         activity_regularizer = l2(l=self.activity_regularizer) if self.activity_regularizer is not None else None
 
         if use_gru:
-            return GRU( units=output_dim,
+            return layers.GRU( units=output_dim,
                         stateful=self.stateful,
                         go_backwards=go_backwards,
                         return_sequences=return_sequences,
@@ -213,7 +421,7 @@ class Lstm(Network):
                         recurrent_dropout=self.recurrent_dropout,  #def: 0.
                         )
         else:
-            return LSTM(units=output_dim,
+            return layers.LSTM(units=output_dim,
                         activation=activation, #def: tanh
                         recurrent_activation=recurrent_activation, #def: hard_sigmoid
                         use_bias=self.use_bias,
@@ -244,7 +452,7 @@ class Lstm(Network):
     def _add_RNN_layer_func(self, previous_layer, output_dim, go_backwards, return_sequences, bidirectional=False, use_gru=False):
         def _bidirectional_wrapper(use_bidirectional, inner_layer, merge_mode='concat'):
             if use_bidirectional:
-                return Bidirectional(layer=inner_layer, merge_mode=merge_mode)
+                return layers.Bidirectional(layer=inner_layer, merge_mode=merge_mode)
             else:
                 return inner_layer
 
@@ -493,3 +701,31 @@ class Lstm(Network):
             steps += 1
 
         return (total_norm / float(steps), min_norm, max_norm)
+
+if __name__ == "__main__":
+
+    from util import settings
+    
+    settings.load("settings.json")
+
+    image1 = tf.placeholder(tf.float32, (None, 256, 256, 1))
+    image2 = tf.placeholder(tf.float32, (None, 256, 256, 1))
+
+    Our_model = CnnLstm(
+        input_shape_ae = (256, 256, 1),
+        loss='mse',
+        data_dimension = 16,
+        settings=settings)
+
+    sess = tf.Session()
+    sess.run(tf.global_variables_initializer())
+    before = sess.run(tf.trainable_variables())
+
+    _ = sess.run(Our_model.train, feed_dict={
+                 image1: np.ones((1, 256, 256, 1)),
+                 image1: np.ones((1, 256, 256, 1)),
+                 })
+    after = sess.run(tf.trainable_variables())
+    #for b, a, n in zip(before, after):
+    #    # Make sure something changed.
+    #    assert (b != a).any()
